@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ciudad Latente</title>
+<style>
+/* Checklist:
+- Un solo index.html con CSS/JS embebidos.
+- Stage A visible al cargar, Stage B oculto.
+- Botón “Haz clic para comenzar la aventura” cambia a Stage B con transición.
+- Canvas genera ciudad abstracta reproducible por seed.
+- Efecto de iluminación sigue cursor/touch con inercia.
+- Tarjetas de obras aparecen al acercarse a POIs y son accesibles.
+- Controles: Reset, Nueva semilla, Baja animación.
+- Funciona en desktop y móvil, con prefers-reduced-motion.
+- Sin dependencias externas.
+*/
+:root {
+  --bg: #0a0d12;
+  --panel: rgba(18, 22, 28, 0.8);
+  --text: #e9edf2;
+  --muted: #b4becb;
+  --accent: #7dd0ff;
+  --accent-2: #9acb6f;
+  --card: rgba(18, 22, 28, 0.92);
+  --shadow: 0 12px 40px rgba(0,0,0,0.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+}
+button, summary {
+  font: inherit;
+  color: inherit;
+}
+.stage {
+  position: relative;
+  min-height: 100vh;
+}
+#stageA {
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: radial-gradient(circle at 20% 20%, rgba(126,208,255,0.08), transparent 35%),
+              radial-gradient(circle at 80% 70%, rgba(154,203,111,0.08), transparent 35%),
+              var(--bg);
+  overflow: hidden;
+}
+#stageA .bg-lines, #stageA .bg-lines::after {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0, rgba(255,255,255,0.04) 1px, transparent 1px, transparent 80px),
+              repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 80px);
+  animation: drift 24s linear infinite;
+  pointer-events: none;
+}
+#stageA .bg-lines::after {
+  content: "";
+  opacity: 0.25;
+  filter: blur(1px);
+  animation-duration: 38s;
+  transform: scale(1.1);
+}
+@keyframes drift {
+  from { transform: translate3d(0,0,0); }
+  to { transform: translate3d(-80px,-60px,0); }
+}
+.hero {
+  position: relative;
+  max-width: 720px;
+  text-align: center;
+  z-index: 1;
+  background: linear-gradient(135deg, rgba(12,16,24,0.85), rgba(12,16,24,0.65));
+  padding: 2.5rem 2.25rem;
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+.hero h1 {
+  font-size: clamp(2.5rem, 5vw, 3.8rem);
+  letter-spacing: -0.02em;
+  margin: 0 0 0.5rem 0;
+}
+.hero h2 {
+  font-weight: 500;
+  color: var(--accent);
+  margin: 0 0 1rem 0;
+}
+.hero p {
+  color: var(--muted);
+  margin: 0 0 1.6rem 0;
+  font-size: 1.05rem;
+}
+.creators {
+  margin: 0 auto 0.2rem auto;
+  padding: 1.1rem 1rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.4rem;
+  max-width: 520px;
+}
+.creators h3 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+.creators ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text);
+}
+.creators li {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1.3rem;
+  background: linear-gradient(135deg, #7dd0ff, #9acb6f);
+  color: #041014;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 10px 30px rgba(125,208,255,0.3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 14px 40px rgba(125,208,255,0.35); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px rgba(125,208,255,0.45);
+}
+.fade-out { opacity: 0; filter: blur(6px); transition: opacity 0.5s ease, filter 0.5s ease; }
+#stageB {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 25% 25%, rgba(100,180,255,0.08), transparent 32%),
+              radial-gradient(circle at 75% 65%, rgba(120,200,140,0.08), transparent 35%),
+              #05070c;
+}
+#city {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #05070c;
+}
+#cards {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.card {
+  position: absolute;
+  min-width: 260px;
+  max-width: 360px;
+  background: var(--card);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.45);
+  padding: 1rem 1rem 1.1rem 1rem;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  transform-origin: center;
+  transition: transform 0.18s ease, opacity 0.2s ease;
+}
+.card.hide { opacity: 0; transform: translateY(10px) scale(0.98); }
+.card img {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.card img.loaded { opacity: 1; }
+.card .title { font-weight: 700; margin: 0 0 0.25rem 0; font-size: 1.05rem; }
+.card .meta { margin: 0; color: var(--muted); font-size: 1rem; }
+.card button.close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  cursor: pointer;
+  font-size: 1rem;
+}
+.card button.close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#controlsPanel {
+  position: absolute;
+  bottom: 18px;
+  left: 18px;
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 0.3rem 0.5rem;
+  pointer-events: auto;
+}
+#controlsPanel summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.35rem 0.4rem;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+}
+#controlsPanel summary::-webkit-details-marker { display: none; }
+#controlsPanel summary:hover { background: rgba(255,255,255,0.05); }
+.controls {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+.controls button, .controls label {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text);
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.controls button:hover, .controls label:hover {
+  background: rgba(255,255,255,0.08);
+}
+.controls input[type="checkbox"] { margin-right: 0.5rem; accent-color: var(--accent); }
+#explore {
+  position: absolute;
+  bottom: 18px;
+  right: 18px;
+  background: rgba(255,255,255,0.12);
+  color: #0a0d12;
+  border: none;
+  border-radius: 14px;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  pointer-events: auto;
+  font-weight: 700;
+  box-shadow: var(--shadow);
+}
+#explore:focus-visible, #controlsPanel:focus-visible, .controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 720px) {
+  .hero { padding: 2rem 1.5rem; }
+  .card { min-width: 220px; max-width: 280px; }
+  .card img { height: 190px; }
+  #explore, #controlsPanel { font-size: 0.95rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  #stageA .bg-lines, #stageA .bg-lines::after { display: none; }
+}
+</style>
+</head>
+<body>
+<main id="stageA" class="stage">
+  <div class="bg-lines"></div>
+  <div class="hero">
+    <h1>Ciudad Latente</h1>
+    <h2>Este proceso es un arte creado por ingenieros civiles informáticos.</h2>
+    <p>Mostramos una forma diferente de buscar el arte en cada lugar.</p>
+    <div class="creators" aria-label="Integrantes y creadores">
+      <h3>Integrantes</h3>
+      <ul>
+        <li>Oscar Farias</li>
+        <li>Gonzalo Rivera</li>
+        <li>Cristopher Muñoz</li>
+        <li>Sebastian Flores</li>
+      </ul>
+    </div>
+    <button id="start" class="btn-primary" aria-label="Haz clic para comenzar la aventura">Haz clic para comenzar la aventura</button>
+  </div>
+</main>
+
+<main id="stageB" class="stage" hidden>
+  <canvas id="city"></canvas>
+  <div id="cards" aria-live="polite"></div>
+  <div id="hud">
+    <details id="controlsPanel">
+      <summary aria-label="Abrir ajustes">Ajustes</summary>
+      <div class="controls">
+        <button id="reset" type="button">Reset (misma semilla)</button>
+        <button id="newSeed" type="button">Nueva semilla</button>
+        <label><input type="checkbox" id="lowMotion"> Baja animación</label>
+      </div>
+    </details>
+    <button id="explore" type="button" aria-label="Explorar obras cercanas">Explorar obras cercanas</button>
+  </div>
+</main>
+
+<div class="sr-only" id="instructions">
+  Usa Tab para enfocar el botón “Explorar obras cercanas” y ciclar puntos de interés. Enter o Espacio activan botones.
+</div>
+
+<script>
+// Dataset de obras (rutas assets/... pueden reemplazarse por URLs públicas p.ej. Wikimedia Commons dominio público).
+const ARTWORKS = [
+  { title: "La noche estrellada", author: "Vincent van Gogh", year: 1889, img: "assets/van-gogh-starry-night.jpg" },
+  { title: "Impresion, sol naciente", author: "Claude Monet", year: 1872, img: "assets/monet-impression-sunrise.jpg" },
+  { title: "La persistencia de la memoria", author: "Salvador Dali", year: 1931, img: "assets/dali-persistence-of-memory.jpg" },
+  { title: "El jardin de las delicias", author: "Hieronymus Bosch", year: 1505, img: "assets/bosch-garden-of-earthly-delights.jpg" },
+  { title: "Las dos Fridas", author: "Frida Kahlo", year: 1939, img: "assets/kahlo-las-dos-fridas.jpg" },
+  { title: "Composicion VIII", author: "Wassily Kandinsky", year: 1923, img: "assets/kandinsky-composition-8.jpg" },
+  { title: "Guernica", author: "Pablo Picasso", year: 1937, img: "assets/picasso-guernica.jpg" },
+  { title: "El beso", author: "Gustav Klimt", year: 1908, img: "assets/klimt-the-kiss.jpg" },
+  { title: "La libertad guiando al pueblo", author: "Eugene Delacroix", year: 1830, img: "assets/delacroix-liberty.jpg" },
+  { title: "La joven de la perla", author: "Johannes Vermeer", year: 1665, img: "assets/vermeer-girl-with-pearl.jpg" },
+  { title: "La escuela de Atenas", author: "Rafael", year: 1511, img: "assets/raphael-school-of-athens.jpg" },
+  { title: "Campbell''s Soup Cans", author: "Andy Warhol", year: 1962, img: "assets/warhol-soup-cans.jpg" }
+];
+
+// Preload images once to evitar parpadeos al abrir tarjetas
+function preloadArtworks() {
+  if (state.imagesReadyPromise) return state.imagesReadyPromise;
+  state.imagesReadyPromise = Promise.all(ARTWORKS.map(art => new Promise(resolve => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = art.img;
+    img.onload = () => resolve();
+    img.onerror = () => resolve(); // no bloquear si falta un asset
+  })));
+  return state.imagesReadyPromise;
+}
+
+const stageA = document.getElementById('stageA');
+const stageB = document.getElementById('stageB');
+const startBtn = document.getElementById('start');
+const canvas = document.getElementById('city');
+const ctx = canvas.getContext('2d');
+const cardsEl = document.getElementById('cards');
+const resetBtn = document.getElementById('reset');
+const newSeedBtn = document.getElementById('newSeed');
+const lowMotionToggle = document.getElementById('lowMotion');
+const exploreBtn = document.getElementById('explore');
+
+const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+
+const state = {
+  seed: getSeedFromQuery() ?? 42004200,
+  rng: null,
+  w: window.innerWidth,
+  h: window.innerHeight,
+  dpr: Math.min(window.devicePixelRatio || 1, 2),
+  fontSize: 13,
+  particles: [],
+  particleCount: 0,
+  pointer: { x: window.innerWidth / 2, y: window.innerHeight / 2, tx: window.innerWidth / 2, ty: window.innerHeight / 2, active: false },
+  flowParams: {},
+  running: false,
+  animationId: null,
+  time: 0,
+  lowMotion: false,
+  reducedMotion: prefersReduced.matches,
+  poiList: [],
+  poiRadius: 90,
+  activeCard: null,
+  recentArt: [],
+  poiIndex: 0,
+  fpsSamples: [],
+  lastFrame: performance.now(),
+  imagesReadyPromise: null,
+  buildingsLayer: null,
+  buildings: [],
+  rainDrops: []
+};
+
+// --- Utils & seedable random ---
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function seededRand() { return state.rng ? state.rng() : Math.random(); }
+function randRange(min, max) { return min + seededRand() * (max - min); }
+function getSeedFromQuery() {
+  try {
+    const val = new URLSearchParams(window.location.search).get('seed');
+    const parsed = parseInt(val, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch (e) { return null; }
+}
+
+// --- Setup ---
+function setSeed(seed) {
+  state.seed = seed >>> 0;
+  state.rng = mulberry32(state.seed || 1);
+  state.flowParams = {
+    a: randRange(-1000, 1000),
+    b: randRange(-1000, 1000),
+    c: randRange(-1000, 1000),
+    d: randRange(-1000, 1000)
+  };
+}
+function resizeCanvas() {
+  state.w = window.innerWidth;
+  state.h = window.innerHeight;
+  state.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  state.fontSize = Math.max(10, Math.min(17, state.w / 90));
+  canvas.width = state.w * state.dpr;
+  canvas.height = state.h * state.dpr;
+  canvas.style.width = state.w + 'px';
+  canvas.style.height = state.h + 'px';
+  ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+  ctx.font = `${state.fontSize}px "Consolas", "Roboto Mono", "SFMono-Regular", monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+}
+function computeParticleCount() {
+  let base = isMobile ? 1400 : 2200;
+  if (state.lowMotion || state.reducedMotion) base *= 0.45;
+  state.particleCount = Math.max(600, Math.floor(base));
+}
+function makeParticle() {
+  return {
+    x: randRange(0, state.w),
+    y: randRange(0, state.h),
+    px: 0,
+    py: 0,
+    speed: randRange(0.4, 1.4),
+    life: Math.floor(randRange(180, 640)),
+    char: Math.random() > 0.5 ? '1' : '0'
+  };
+}
+function initParticles() {
+  computeParticleCount();
+  state.particles = Array.from({ length: state.particleCount }, () => makeParticle());
+}
+// Genera un layer offscreen con edificios formados por dígitos 0/1
+function generateBuildingsLayer() {
+  const off = document.createElement('canvas');
+  off.width = state.w * state.dpr;
+  off.height = state.h * state.dpr;
+  const octx = off.getContext('2d');
+  octx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+  octx.fillStyle = '#05070c';
+  octx.fillRect(0, 0, state.w, state.h);
+  octx.font = `${state.fontSize}px "Consolas", "Roboto Mono", "SFMono-Regular", monospace`;
+  octx.textBaseline = 'middle';
+  octx.textAlign = 'center';
+
+  const cellH = state.fontSize + 3;
+  const cellW = state.fontSize * 0.9 + 4;
+  state.buildings = [];
+  let x = -randRange(15, 35);
+  while (x < state.w + 60) {
+    const bw = randRange(60, 140);
+    const bh = randRange(state.h * 0.25, state.h * 0.8);
+    const top = state.h - bh;
+    state.buildings.push({ x, w: bw, top, height: bh });
+
+    // Silueta del edificio
+    const grad = octx.createLinearGradient(x, top, x, state.h);
+    grad.addColorStop(0, 'rgba(20,30,38,0.55)');
+    grad.addColorStop(1, 'rgba(8,12,18,0.95)');
+    octx.fillStyle = grad;
+    octx.fillRect(x, top, bw, bh);
+
+    // Contorno suave
+    octx.fillStyle = 'rgba(255,255,255,0.04)';
+    octx.fillRect(x, top, 1, bh);
+    octx.fillRect(x + bw - 1, top, 1, bh);
+
+    // Dígitos en la fachada
+    for (let cx = x + cellW * 0.7; cx < x + bw - cellW * 0.4; cx += cellW) {
+      let flip = seededRand() > 0.5;
+      for (let y = state.h - cellH * 0.6; y > top + cellH; y -= cellH) {
+        flip = !flip;
+        const char = flip ? '1' : '0';
+        const rel = 1 - (y - top) / bh;
+        const hue = 130 + rel * 30 + seededRand() * 10;
+        const sat = 45 + rel * 25;
+        const light = 32 + rel * 25;
+        const alpha = 0.32 + rel * 0.1;
+        octx.fillStyle = `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`;
+        octx.fillText(char, cx + randRange(-1, 1), y + randRange(-1, 1));
+      }
+    }
+    x += bw + randRange(12, 28);
+  }
+  state.buildingsLayer = off;
+}
+function renderBuildingsLayer() {
+  if (!state.buildingsLayer) return;
+  const jitterX = Math.sin(state.time * 0.00018) * 2;
+  const jitterY = Math.cos(state.time * 0.00011) * 1.5;
+  ctx.save();
+  ctx.globalAlpha = 0.98;
+  ctx.drawImage(state.buildingsLayer, jitterX, jitterY, state.w, state.h);
+  ctx.restore();
+}
+function drawBuildingsFlicker() {
+  if (!state.buildings.length) return;
+  const flickers = state.lowMotion || state.reducedMotion ? 18 : 70;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.font = `${state.fontSize}px "Consolas", "Roboto Mono", "SFMono-Regular", monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < flickers; i++) {
+    const b = state.buildings[Math.floor(Math.random() * state.buildings.length)];
+    if (!b) continue;
+    const x = b.x + randRange(6, b.w - 6);
+    const y = b.top + randRange(6, b.height - 6);
+    const rel = 1 - (y - b.top) / b.height;
+    const hue = 125 + rel * 30;
+    const sat = 50 + rel * 20;
+    const light = 45 + rel * 30;
+    const alpha = state.lowMotion ? 0.16 : 0.24;
+    ctx.fillStyle = `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`;
+    ctx.fillText(Math.random() > 0.5 ? '1' : '0', x, y);
+  }
+  ctx.restore();
+}
+// Lluvia sutil sobre los edificios
+function initRainDrops() {
+  const count = state.lowMotion || state.reducedMotion ? 50 : 120;
+  state.rainDrops = Array.from({ length: count }, () => ({
+    x: randRange(0, state.w),
+    y: randRange(0, state.h),
+    len: randRange(12, 26),
+    speed: randRange(80, 160),
+    alpha: randRange(0.05, 0.18)
+  }));
+}
+function drawRain(dt) {
+  if (!state.rainDrops.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.strokeStyle = 'rgba(150,220,210,0.4)';
+  ctx.lineWidth = 1;
+  for (const drop of state.rainDrops) {
+    drop.y += drop.speed * dt * 0.001;
+    if (drop.y - drop.len > state.h) {
+      drop.y = -randRange(0, state.h * 0.2);
+      drop.x = randRange(0, state.w);
+    }
+    const dx = 0.8; // leve diagonal
+    ctx.globalAlpha = drop.alpha;
+    ctx.beginPath();
+    ctx.moveTo(drop.x, drop.y);
+    ctx.lineTo(drop.x - dx, drop.y - drop.len);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function placePOIs(seed, count, w, h) {
+  const prng = mulberry32((seed || 1) + 12345);
+  const points = [];
+  const minDist = Math.min(w, h) / 6;
+  let tries = 0;
+  while (points.length < count && tries < count * 40) {
+    tries++;
+    const x = prng() * w * 0.9 + w * 0.05;
+    const y = prng() * h * 0.9 + h * 0.05;
+    if (points.every(p => Math.hypot(p.x - x, p.y - y) > minDist)) {
+      points.push({ x, y, id: points.length });
+    }
+  }
+  return points;
+}
+
+// --- Flow field & particles ---
+function flowNoise(x, y, t) {
+  const s1 = Math.sin((x + state.flowParams.a) * 0.002 + t * 0.0004);
+  const s2 = Math.sin((y + state.flowParams.b) * 0.0025 - t * 0.0003);
+  const s3 = Math.sin(((x + y) + state.flowParams.c) * 0.0014 + t * 0.0002);
+  return (s1 + s2 + s3) / 3; // range ~[-1,1]
+}
+function flowAngle(x, y, t) {
+  return flowNoise(x, y, t) * Math.PI * 2;
+}
+function stepParticles(dt) {
+  if (state.reducedMotion) return;
+  ctx.font = `${state.fontSize}px "Consolas", "Roboto Mono", "SFMono-Regular", monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(120,255,170,0.18)';
+  ctx.shadowBlur = state.lowMotion ? 3 : 6;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < state.particles.length; i++) {
+    const p = state.particles[i];
+    p.px = p.x;
+    p.py = p.y;
+    const angle = flowAngle(p.x, p.y, state.time);
+    p.x += Math.cos(angle) * p.speed * (dt * 0.06);
+    p.y += Math.sin(angle) * p.speed * (dt * 0.06) + dt * 0.035; // leve lluvia descendente
+
+    if (p.x < 0 || p.x > state.w || p.y < 0 || p.y > state.h || p.life-- <= 0) {
+      state.particles[i] = makeParticle();
+      continue;
+    }
+
+    const n = flowNoise(p.x, p.y, state.time);
+    const hue = 135 + n * 45; // tono verde-azulado
+    const sat = 40 + (n + 1) * 28;
+    const light = 34 + (n + 1) * 14;
+    const alpha = state.lowMotion ? 0.22 : 0.3;
+    ctx.fillStyle = `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`;
+    if (Math.random() < 0.002) p.char = p.char === '0' ? '1' : '0'; // pequeño parpadeo de dígitos
+    ctx.fillText(p.char, p.x, p.y);
+  }
+  ctx.restore();
+}
+
+// --- Lighting ---
+function drawHalo() {
+  state.pointer.x += (state.pointer.tx - state.pointer.x) * 0.12;
+  state.pointer.y += (state.pointer.ty - state.pointer.y) * 0.12;
+  const r = state.lowMotion ? 110 : 160;
+  const g = ctx.createRadialGradient(state.pointer.x, state.pointer.y, 0, state.pointer.x, state.pointer.y, r);
+  g.addColorStop(0, 'rgba(140,190,255,0.4)');
+  g.addColorStop(0.45, 'rgba(120,180,255,0.18)');
+  g.addColorStop(1, 'rgba(80,130,200,0)');
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(state.pointer.x, state.pointer.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// --- Cards & POIs ---
+function assignArtworksToPOIs(pois) {
+  const indices = [...ARTWORKS.keys()];
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(seededRand() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return pois.map((p, idx) => ({ ...p, artIndex: indices[idx % indices.length] }));
+}
+function pickArtwork(index) {
+  const art = ARTWORKS[index];
+  return art;
+}
+function hideCard() {
+  if (!state.activeCard) return;
+  const { el } = state.activeCard;
+  el.classList.add('hide');
+  setTimeout(() => { if (el.parentNode) el.remove(); }, 160);
+  state.activeCard = null;
+}
+function showCardForPoi(poi, anchorX, anchorY) {
+  if (state.activeCard && state.activeCard.poiId === poi.id) return;
+  hideCard();
+  const art = pickArtwork(poi.artIndex);
+  if (!art) return;
+  state.recentArt.push(poi.artIndex);
+  if (state.recentArt.length > 4) state.recentArt.shift();
+
+  const card = document.createElement('article');
+  card.className = 'card';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-live', 'polite');
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'close';
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Cerrar tarjeta');
+  closeBtn.textContent = '\u00d7';
+  closeBtn.addEventListener('click', hideCard);
+  const img = document.createElement('img');
+  img.decoding = 'async';
+  img.src = art.img;
+  img.alt = `${art.title} de ${art.author} (${art.year}).`;
+  img.loading = 'lazy';
+  img.addEventListener('load', () => img.classList.add('loaded'));
+  if (img.complete) img.classList.add('loaded');
+  const title = document.createElement('p');
+  title.className = 'title';
+  title.textContent = art.title;
+  const meta = document.createElement('p');
+  meta.className = 'meta';
+  meta.textContent = `${art.year}`;
+  card.append(closeBtn, img, title, meta);
+
+  const targetX = anchorX + (anchorX > state.w * 0.5 ? -260 : 40);
+  const targetY = anchorY + (anchorY > state.h * 0.5 ? -220 : 40);
+  const x = Math.max(16, Math.min(state.w - 240, targetX));
+  const y = Math.max(16, Math.min(state.h - 240, targetY));
+  card.style.transform = `translate(${x}px, ${y}px)`;
+  cardsEl.appendChild(card);
+  state.activeCard = { poiId: poi.id, el: card };
+}
+function checkPOIProximity() {
+  if (!state.poiList.length) return;
+  const r = state.poiRadius;
+  const px = state.pointer.x;
+  const py = state.pointer.y;
+  let nearest = null;
+  for (const poi of state.poiList) {
+    const dist = Math.hypot(px - poi.x, py - poi.y);
+    if (dist < r) { nearest = poi; break; }
+  }
+  if (nearest) showCardForPoi(nearest, px + 12, py - 12);
+  else hideCard();
+}
+
+// --- Controls & a11y ---
+function startStageB() {
+  stageA.classList.add('fade-out');
+  stageB.hidden = false;
+  setTimeout(() => { stageA.hidden = true; }, 520);
+  prepareExperience();
+}
+function prepareExperience() {
+  stop();
+  preloadArtworks();
+  setSeed(state.seed);
+  resizeCanvas();
+  generateBuildingsLayer();
+  initRainDrops();
+  ctx.fillStyle = '#05070c';
+  ctx.fillRect(0, 0, state.w, state.h);
+  initParticles();
+  state.poiRadius = isMobile ? 80 : 95;
+  const basePOIs = placePOIs(state.seed, 12, state.w, state.h);
+  state.poiList = assignArtworksToPOIs(basePOIs);
+  state.time = 0;
+  state.pointer = { x: state.w / 2, y: state.h / 2, tx: state.w / 2, ty: state.h / 2, active: false };
+  state.running = true;
+  state.lastFrame = performance.now();
+  loop(state.lastFrame);
+}
+function stop() {
+  if (state.animationId) cancelAnimationFrame(state.animationId);
+  state.running = false;
+  hideCard();
+}
+function loop(now) {
+  if (!state.running) return;
+  const dt = now - state.lastFrame || 16;
+  state.lastFrame = now;
+  state.time += dt;
+
+  state.fpsSamples.push(1000 / dt);
+  if (state.fpsSamples.length > 45) state.fpsSamples.shift();
+  const avgFps = state.fpsSamples.reduce((a, b) => a + b, 0) / state.fpsSamples.length;
+  if (!state.lowMotion && avgFps < 30 && !state.reducedMotion) {
+    state.lowMotion = true;
+    lowMotionToggle.checked = true;
+    initParticles();
+  }
+
+  ctx.fillStyle = 'rgba(5,7,12,1)';
+  ctx.fillRect(0, 0, state.w, state.h);
+
+  renderBuildingsLayer();
+  drawBuildingsFlicker();
+  drawRain(dt);
+  drawHalo();
+  checkPOIProximity();
+
+  state.animationId = requestAnimationFrame(loop);
+}
+
+// --- Event listeners ---
+startBtn.addEventListener('click', startStageB);
+startBtn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startStageB(); }
+});
+resetBtn.addEventListener('click', () => prepareExperience());
+newSeedBtn.addEventListener('click', () => {
+  const newSeed = Math.floor(Math.random() * 1e9);
+  const url = new URL(window.location.href);
+  url.searchParams.set('seed', newSeed);
+  window.history.replaceState({}, '', url.toString());
+  setSeed(newSeed);
+  prepareExperience();
+});
+lowMotionToggle.addEventListener('change', (e) => {
+  state.lowMotion = e.target.checked;
+  initParticles();
+});
+exploreBtn.addEventListener('click', () => {
+  if (!state.poiList.length) return;
+  const poi = state.poiList[state.poiIndex % state.poiList.length];
+  state.poiIndex = (state.poiIndex + 1) % state.poiList.length;
+  state.pointer.tx = poi.x;
+  state.pointer.ty = poi.y;
+  state.pointer.active = true;
+  showCardForPoi(poi, poi.x, poi.y);
+});
+prefersReduced.addEventListener('change', (e) => {
+  state.reducedMotion = e.matches;
+  prepareExperience();
+});
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  initParticles();
+  generateBuildingsLayer();
+  initRainDrops();
+  state.poiList = assignArtworksToPOIs(placePOIs(state.seed, 12, state.w, state.h));
+});
+canvas.addEventListener('pointermove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  state.pointer.tx = e.clientX - rect.left;
+  state.pointer.ty = e.clientY - rect.top;
+  state.pointer.active = true;
+});
+canvas.addEventListener('pointerdown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  state.pointer.tx = e.clientX - rect.left;
+  state.pointer.ty = e.clientY - rect.top;
+  state.pointer.active = true;
+});
+canvas.addEventListener('pointerleave', () => {
+  state.pointer.active = false;
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stop();
+  else if (stageB.hidden === false) prepareExperience();
+});
+
+setSeed(state.seed);
+resizeCanvas();
+preloadArtworks();
+</script>
+</body>
+</html>
+
+
